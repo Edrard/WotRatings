@@ -1,0 +1,15 @@
+{
+    "name": "edrard/wotratings",
+    "description": "World of Tanks statistics preparation and ER, WN6, WN8 and legacy ratings for PHP 8.5, with editable inputs",
+    "homepage": "https://github.com/Edrard/WotRatings",
+    "support": {"source": "https://github.com/Edrard/WotRatings", "issues": "https://github.com/Edrard/WotRatings/issues"},
+    "type": "library",
+    "license": "MIT",
+    "authors": [{"name": "Edrard"}],
+    "require": {"php": "^8.5"},
+    "require-dev": {"phpunit/phpunit": "^12.5", "phpstan/phpstan": "^2.1", "laravel/pint": "^1.0"},
+    "autoload": {"psr-4": {"Edrard\\WotRatings\\": "src/"}},
+    "autoload-dev": {"psr-4": {"Edrard\\Tests\\WotRatings\\": "tests/"}},
+    "scripts": {"test": "phpunit", "analyse": "phpstan analyse --memory-limit=512M", "format": "pint src tests examples tools", "format:check": "pint --test src tests examples tools"},
+    "config": {"sort-packages": true}
+}

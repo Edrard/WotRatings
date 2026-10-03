@@ -1,0 +1,223 @@
+{
+    "provenance": {
+        "source": "Old_work\/soft\/statistic\/new_serv_distrib\/rating.php",
+        "sha256": "5490b70a2aa71fafa71b4f888758e517ff6ff529c8ecc4cec4138082e8ab2d3a",
+        "inputs": "Synthetic, no player records",
+        "date": "2026-10-03"
+    },
+    "cases": [
+        {
+            "statistics": {
+                "battles": 100,
+                "wins": 50,
+                "damage_dealt": 100000,
+                "frags": 100,
+                "spotted": 100,
+                "dropped_capture_points": 100,
+                "capture_points": 100,
+                "xp": 50000
+            },
+            "averageTier": 6,
+            "tankBattles": [
+                {
+                    "battles": 100,
+                    "nominal_damage": 900
+                }
+            ],
+            "expected": {
+                "er": 1177,
+                "wn6": 1323,
+                "wn7": 1323,
+                "broni": 1796,
+                "noobmeter": 1513
+            }
+        },
+        {
+            "statistics": {
+                "battles": 2400,
+                "wins": 1590,
+                "damage_dealt": 3400000,
+                "frags": 4300,
+                "spotted": 2100,
+                "dropped_capture_points": 1800,
+                "capture_points": 200,
+                "xp": 2200000
+            },
+            "averageTier": 8.35,
+            "tankBattles": [
+                {
+                    "battles": 2400,
+                    "nominal_damage": 900
+                }
+            ],
+            "expected": {
+                "er": 1257,
+                "wn6": 1744,
+                "wn7": 1744,
+                "broni": 4895,
+                "noobmeter": 2256
+            }
+        },
+        {
+            "statistics": {
+                "battles": 1000,
+                "wins": 410,
+                "damage_dealt": 140000,
+                "frags": 1200,
+                "spotted": 700,
+                "dropped_capture_points": 2200,
+                "capture_points": 1700,
+                "xp": 100000
+            },
+            "averageTier": 2.5,
+            "tankBattles": [
+                {
+                    "battles": 1000,
+                    "nominal_damage": 900
+                }
+            ],
+            "expected": {
+                "er": 1093,
+                "wn6": 581,
+                "wn7": 465,
+                "broni": 475,
+                "noobmeter": 578
+            }
+        },
+        {
+            "statistics": {
+                "battles": 1,
+                "wins": 1,
+                "damage_dealt": 120,
+                "frags": 1,
+                "spotted": 0,
+                "dropped_capture_points": 0,
+                "capture_points": 0,
+                "xp": 100
+            },
+            "averageTier": 1,
+            "tankBattles": [
+                {
+                    "battles": 1,
+                    "nominal_damage": 900
+                }
+            ],
+            "expected": {
+                "er": 350,
+                "wn6": 339,
+                "wn7": 548,
+                "broni": 0,
+                "noobmeter": 1163
+            }
+        },
+        {
+            "statistics": {
+                "battles": 20001,
+                "wins": 15000,
+                "damage_dealt": 60000000,
+                "frags": 50000,
+                "spotted": 20000,
+                "dropped_capture_points": 12000,
+                "capture_points": 6000,
+                "xp": 16000000
+            },
+            "averageTier": 10,
+            "tankBattles": [
+                {
+                    "battles": 20001,
+                    "nominal_damage": 900
+                }
+            ],
+            "expected": {
+                "er": 2012,
+                "wn6": 2335,
+                "wn7": 2335,
+                "broni": 14755,
+                "noobmeter": 4105
+            }
+        }
+    ],
+    "scales": [
+        {
+            "rating": 0,
+            "expected": {
+                "xeff": 0,
+                "xwn6": 0,
+                "xwn7": 0,
+                "xnm": 0
+            }
+        },
+        {
+            "rating": 419,
+            "expected": {
+                "xeff": 0,
+                "xwn6": 16.621252548067716,
+                "xwn7": 15.472889876115701,
+                "xnm": 0
+            }
+        },
+        {
+            "rating": 420,
+            "expected": {
+                "xeff": 0.08854204955098943,
+                "xwn6": 16.666594307199997,
+                "xwn7": 15.514454832000002,
+                "xnm": 0
+            }
+        },
+        {
+            "rating": 1000,
+            "expected": {
+                "xeff": 42.95400000000025,
+                "xwn6": 43.12,
+                "xwn7": 42.699999999999996,
+                "xnm": 17.12999999999991
+            }
+        },
+        {
+            "rating": 1900,
+            "expected": {
+                "xeff": 97.67844587400035,
+                "xwn6": 92.78990199999996,
+                "xwn7": 92.44686999999999,
+                "xnm": 84.17889299999956
+            }
+        },
+        {
+            "rating": 2160,
+            "expected": {
+                "xeff": 100,
+                "xwn6": 99.63640491519996,
+                "xwn7": 99.72254131199999,
+                "xnm": 99.75887999999998
+            }
+        },
+        {
+            "rating": 2180,
+            "expected": {
+                "xeff": 100,
+                "xwn6": 100,
+                "xwn7": 99.94302059199998,
+                "xnm": 99.84551999999996
+            }
+        },
+        {
+            "rating": 2250,
+            "expected": {
+                "xeff": 100,
+                "xwn6": 100,
+                "xwn7": 100,
+                "xnm": 100
+            }
+        },
+        {
+            "rating": 3000,
+            "expected": {
+                "xeff": 100,
+                "xwn6": 100,
+                "xwn7": 100,
+                "xnm": 100
+            }
+        }
+    ]
+}
