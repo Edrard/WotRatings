@@ -37,11 +37,23 @@ Run `composer update edrard/wotratings` in the consuming application. Runtime: P
 
 `WotRatings` calculates ER, WN6 and WN8. `LegacyRatings` contains WN7, Broni, Noobmeter and historical scale conversions. Neither calculator accepts a preparer object or automatically collects missing data.
 
-## Load data and check battles immediately
+## Load data: choose the input format
 
 The following examples use the executable synthetic dataset in [examples/player-data.php](examples/player-data.php): account `123`, one tier-6 tank, 100 account battles in both `all` and `random`, and 100 short tank battles in `all`. Full data contains 80 `all` battles with 160000 damage, and 60 `random` battles with 60000 damage. The expected table contains one tank with damage 1000, frags/spots/defence 1, and win rate 50 percent.
 
-The examples below run in order from the package root after `composer install`. In an application, supply your own decoded arrays instead of this example file.
+The examples below run in order from the package root after `composer install`. In an application, supply your own decoded arrays instead of this example file. An API response here means a PHP array obtained by decoding JSON, not a JSON string or HTTP response object.
+
+All three loading methods perform the same immediate battle-count and readiness checks. Choose the method by the data you already have and whether you want to reuse an existing preparer:
+
+| Method | Input | Object lifecycle | Return value |
+| --- | --- | --- | --- |
+| `setData($player, $shortTanks, $fullTanks = null)` | One player's records, already selected from `data[$accountId]` | Replaces data in the existing preparer | Battle-count status: `bool` |
+| `setApiResponses($accountId, $accountInfo, $accountTanks, $tankStats = null)` | Whole decoded WG responses, including `status` and `data` | Selects the player by ID and replaces data in the existing preparer | The same battle-count status: `bool` |
+| `fromApiResponses($accountId, $accountInfo, $accountTanks, $tankStats = null, $catalogue = [], $expectedValues = null)` | Whole decoded WG responses and optional configuration | Creates and loads a new preparer | `PlayerDataPreparer` object |
+
+### What a decoded API response contains
+
+The response contains a `status` and a `data` map keyed by account ID. A request may return multiple players; loading selects only the requested player. For account/info, that entry is a player record. For account/tanks and tanks/stats, that entry is a list of tank records.
 
 ```php
 require 'vendor/autoload.php';
@@ -51,21 +63,174 @@ use Edrard\WotRatings\PlayerDataPreparer;
 use Edrard\WotRatings\WotRatings;
 
 $data = require 'examples/player-data.php';
+$accountId = 123;
+$accountInfo = $data['accountInfoResponse'];
+$accountTanks = $data['accountTanksResponse'];
+$tankStats = $data['tankStatsResponse'];
+
+echo json_encode([
+    'accountInfo' => $accountInfo,
+    'accountTanks' => $accountTanks,
+]);
+```
+
+Decoded input arrays, shown as JSON:
+
+```json
+{
+  "accountInfo": {
+    "status": "ok",
+    "data": {
+      "123": {
+        "account_id": 123,
+        "statistics": {
+          "all": {
+            "battles": 100,
+            "wins": 50,
+            "damage_dealt": 100000,
+            "frags": 100,
+            "spotted": 100,
+            "capture_points": 100,
+            "dropped_capture_points": 100
+          },
+          "random": {
+            "battles": 100,
+            "wins": 50,
+            "damage_dealt": 100000,
+            "frags": 100,
+            "spotted": 100,
+            "capture_points": 100,
+            "dropped_capture_points": 100
+          }
+        }
+      }
+    }
+  },
+  "accountTanks": {
+    "status": "ok",
+    "data": {
+      "123": [
+        {"account_id": 123, "tank_id": 1, "statistics": {"battles": 100}}
+      ]
+    }
+  }
+}
+```
+
+### setData: select the player's records yourself
+
+Use `setData()` when you already have the player record and tank lists, for example from a cache, or want to select them from API responses yourself. The outer `status` and `data` fields are not passed to this method. Your application validates API success and account coverage before selecting these entries.
+
+```php
 $preparer = new PlayerDataPreparer(catalogue: $data['catalogue']);
 $ratings = new WotRatings();
 $ratings->setExpectedValues($data['expected']);
 
-$status = $preparer->setData($data['player'], $data['short']);
-echo json_encode($status);
+// Select one player from each response. These are ordinary array lookups.
+$player = $accountInfo['data'][$accountId];
+$shortTanks = $accountTanks['data'][$accountId];
+
+$status = $preparer->setData($player, $shortTanks);
+echo json_encode([
+    'status' => $status,
+    'availableWn8Modes' => $preparer->availableModes('wn8'),
+    'missingWn8Modes' => $preparer->missingFullTankModes('wn8'),
+]);
 ```
 
 Response:
 
 ```json
-true
+{"status":true,"availableWn8Modes":["all"],"missingWn8Modes":["random"]}
 ```
 
-`setData(array $player, array $shortTanks, ?array $fullTanks = null): bool` accepts extracted records, not WG envelopes. `player` is one account/info record; the other arguments are tank record lists for that player. Full statistics can be provided as the third argument immediately.
+The account and short tank totals both contain 100 `all` battles, so status is true. Random account counters exist, but short tank records cover only all, so random requires full tank data. The same applies to ER and WN6: their random average tier requires random tank battle counts.
+
+Full statistics can be provided immediately as the third argument: select `$tankStats['data'][$accountId]` and pass that list. Omitting it starts a new player snapshot without full statistics, clearing any full data from the preceding load.
+
+### setApiResponses: let the preparer select the player's records
+
+Use `setApiResponses()` when you have whole decoded responses. Pass those arrays unchanged, together with the account ID. The method checks API status, verifies the requested account is present, selects `data[$accountId]` from each response and calls the same record-loading logic as setData.
+
+```php
+$apiPreparer = new PlayerDataPreparer(catalogue: $data['catalogue']);
+$apiStatus = $apiPreparer->setApiResponses(
+    $accountId,
+    $accountInfo,
+    $accountTanks,
+);
+echo json_encode([
+    'status' => $apiStatus,
+    'availableWn8Modes' => $apiPreparer->availableModes('wn8'),
+    'missingWn8Modes' => $apiPreparer->missingFullTankModes('wn8'),
+    'sameReportAsSetData' => $apiPreparer->report === $preparer->report,
+]);
+```
+
+Response:
+
+```json
+{"status":true,"availableWn8Modes":["all"],"missingWn8Modes":["random"],"sameReportAsSetData":true}
+```
+
+The prepared data and report are equivalent to the setData example. If full statistics are already available, pass the whole `$tankStats` response as the fourth argument. If they are not available, omit the argument or pass null; a supplied response whose selected account record is null is invalid.
+
+### fromApiResponses: create and load a new preparer
+
+This static factory is a convenience for construction plus setApiResponses. It returns the new preparer, not a boolean status. Inspect its report to see the immediate checks. Use either setter to reuse an existing instance for the next player; use the factory when a separate instance is useful.
+
+```php
+$created = PlayerDataPreparer::fromApiResponses(
+    $accountId,
+    $accountInfo,
+    $accountTanks,
+    catalogue: $data['catalogue'],
+);
+echo json_encode([
+    'availableWn8Modes' => $created->availableModes('wn8'),
+    'missingWn8Modes' => $created->missingFullTankModes('wn8'),
+    'sameReportAsSetData' => $created->report === $preparer->report,
+]);
+```
+
+Response:
+
+```json
+{"availableWn8Modes":["all"],"missingWn8Modes":["random"],"sameReportAsSetData":true}
+```
+
+The factory adds no separate preparation algorithm. These two forms are equivalent in configuration, loaded data and report; they create separate objects:
+
+```php
+// Convenience factory: construct and load, returning the new object.
+$fromFactory = PlayerDataPreparer::fromApiResponses(
+    $accountId,
+    $accountInfo,
+    $accountTanks,
+    catalogue: $data['catalogue'],
+);
+
+// The same steps written explicitly: the setter returns a boolean.
+$manual = new PlayerDataPreparer(catalogue: $data['catalogue']);
+$manualStatus = $manual->setApiResponses($accountId, $accountInfo, $accountTanks);
+
+echo json_encode([
+    'factoryReturnsPreparer' => $fromFactory instanceof PlayerDataPreparer,
+    'setterReturnsStatus' => $manualStatus,
+    'differentObjects' => $fromFactory !== $manual,
+    'sameReport' => $fromFactory->report === $manual->report,
+]);
+```
+
+Response:
+
+```json
+{"factoryReturnsPreparer":true,"setterReturnsStatus":true,"differentObjects":true,"sameReport":true}
+```
+
+For processing many players with one configured preparer, construct it once and call setData or setApiResponses for each player. The factory is optional convenience when creating a new instance, not a required loading step.
+
+### What the loading status means
 
 **The returned boolean concerns battle-count mismatches only.** False means at least one comparable account/short-tank mode has different totals. True means no numeric mismatch was detected. Missing mode coverage does not turn this status into false. Malformed counters cannot establish a numeric comparison and appear in diagnostics; true is not a guarantee that every rating can be prepared.
 
@@ -214,11 +379,17 @@ An unavailable mode does not block other ready modes. `requiresFullTanks` is loc
 
 ## Provide full statistics before calculation
 
-`setFullTankStatistics(array $fullTanks): void` replaces the extracted full list for the current player. `setFullTankStatsResponse(array $tankStats): void` extracts it from a WG status/data envelope. Both refresh readiness/report and invalidate dependent caches immediately; they return no value. The envelope setter requires the current account ID.
+Use one of these methods to add full statistics to the loaded player without replacing the account and short tank data. The difference is the same as with the two loading setters:
+
+| Method | What to pass | Return value |
+| --- | --- | --- |
+| `setFullTankStatistics(array $fullTanks)` | The selected tank list: `$tankStats['data'][$accountId]` | `void` |
+| `setFullTankStatsResponse(array $tankStats)` | The whole decoded tanks/stats response, including status/data | `void` |
+
+Both replace the current full list, refresh readiness/report and invalidate dependent caches immediately. The response setter selects the current player's ID, which must already be known from loading. It checks the response and then calls setFullTankStatistics; it does not perform additional calculations or requests.
 
 ```php
 $preparer->setFullTankStatsResponse($data['tankStatsResponse']);
-// Alternative: $preparer->setFullTankStatistics($data['full']);
 echo json_encode([
     'available' => $preparer->availableModes('wn8'),
     'missing' => $preparer->missingFullTankModes('wn8'),
@@ -229,6 +400,28 @@ Response:
 
 ```json
 {"available":["all","random"],"missing":[]}
+```
+
+These equivalent examples use the two separate preparers loaded above:
+
+```php
+// Select the list yourself:
+$apiPreparer->setFullTankStatistics($tankStats['data'][$accountId]);
+
+// Or let the preparer select it from the response:
+$created->setFullTankStatsResponse($tankStats);
+
+echo json_encode([
+    'fromRecords' => $apiPreparer->availableModes('wn8'),
+    'fromResponse' => $created->availableModes('wn8'),
+    'sameReport' => $apiPreparer->report === $created->report,
+]);
+```
+
+Response:
+
+```json
+{"fromRecords":["all","random"],"fromResponse":["all","random"],"sameReport":true}
 ```
 
 A valid replacement can still lack required counters; those gaps are reported by rating. Invalid structure or identity leaves the previous full dataset intact. Already returned arrays remain independent snapshots.
@@ -485,43 +678,37 @@ Response:
 
 Passing full data as the third setData argument produces the same prepared results immediately. The status is still false for a detected short/account mismatch; it reports the comparison, not whether full fallback resolved preparation. Use readiness to decide whether additional collection is needed.
 
-## Decoded API envelopes and the factory
+## Load account and full tank data together
 
-`setApiResponses(int $accountId, array $accountInfo, array $accountTanks, ?array $tankStats = null): bool` is the envelope equivalent of setData. It checks status, account coverage and identity before replacing data and returns the same battle-count status. Supplied tankStats must contain an actual list; null means omit the whole argument, not a missing player's record in an envelope.
-
-```php
-echo json_encode($preparer->setApiResponses(
-    123,
-    $data['accountInfoResponse'],
-    $data['accountTanksResponse'],
-    $data['tankStatsResponse'],
-));
-```
-
-Response:
-
-```json
-true
-```
-
-`fromApiResponses()` remains a convenience factory returning a loaded preparer. It runs the same checks immediately, retains the requested account ID even if fields filtering omitted account_id, and exposes the report on that object.
+When all three responses are already available, either loading setter can accept full statistics immediately. The following calls prepare the same data. setData takes selected records; setApiResponses takes the whole responses:
 
 ```php
-$other = PlayerDataPreparer::fromApiResponses(
-    123,
-    $data['accountInfoResponse'],
-    $data['accountTanksResponse'],
-    $data['tankStatsResponse'],
-    catalogue: $data['catalogue'],
+$recordStatus = $apiPreparer->setData(
+    $accountInfo['data'][$accountId],
+    $accountTanks['data'][$accountId],
+    $tankStats['data'][$accountId],
 );
-echo json_encode($other->availableModes('wn8'));
+$responseStatus = $created->setApiResponses(
+    $accountId,
+    $accountInfo,
+    $accountTanks,
+    $tankStats,
+);
+echo json_encode([
+    'setDataStatus' => $recordStatus,
+    'setApiResponsesStatus' => $responseStatus,
+    'availableWn8Modes' => $created->availableModes('wn8'),
+    'samePreparedWn8' => $apiPreparer->wn8('random') === $created->wn8('random'),
+]);
 ```
 
 Response:
 
 ```json
-["all","random"]
+{"setDataStatus":true,"setApiResponsesStatus":true,"availableWn8Modes":["all","random"],"samePreparedWn8":true}
 ```
+
+The factory accepts the same optional whole tankStats response in its fourth argument. It retains the requested account ID even when fields filtering omitted account_id, as setApiResponses does.
 
 ## Expected values and direct calculation
 
