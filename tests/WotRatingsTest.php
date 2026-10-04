@@ -54,6 +54,19 @@ final class WotRatingsTest extends TestCase
         (new WotRatings())->wn8FromFull([['tank_id' => 1, 'statistics' => $this->statistics()]]);
     }
 
+    public function testFullInvalidOverrideDoesNotFallBackOrReplaceInstalledTable(): void
+    {
+        $ratings = new WotRatings();
+        $ratings->setExpectedValues($this->table());
+        $full = [['tank_id' => 1, 'statistics' => $this->statistics()]];
+        try {
+            $ratings->wn8FromFull($full, []);
+            self::fail('An explicit empty override must fail.');
+        } catch (InvalidInput) {
+            self::assertSame(1565, $ratings->wn8FromFull($full));
+        }
+    }
+
     public function testOverrideWorksWithoutDefaultAndDoesNotInstallIt(): void
     {
         $ratings = new WotRatings();

@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace Edrard\Tests\WotRatings;
 
-use Edrard\WotRatings\PlayerDataPreparer;
-use Edrard\WotRatings\WotRatings;
+use Edrard\WotRatings\Exception\CalculationFailed;
 use Edrard\WotRatings\Exception\InvalidInput;
 use Edrard\WotRatings\Exception\PreparationUnavailable;
+use Edrard\WotRatings\PlayerDataPreparer;
+use Edrard\WotRatings\WotRatings;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class PlayerDataPreparerTest extends TestCase
@@ -22,366 +24,392 @@ final class PlayerDataPreparerTest extends TestCase
         return [1 => ['expDamage' => 1000, 'expSpot' => 1, 'expFrag' => 1, 'expDef' => 1, 'expWinRate' => 50]];
     }
 
-    public function testShortMatchingDataAndCombatInputs(): void
+    private function loaded(array $player, array $short = [], ?array $full = null, array $catalogue = [1 => ['tier' => 6]], ?array $expected = null): PlayerDataPreparer
     {
-        $stats = $this->stats();
-        $preparer = new PlayerDataPreparer(['statistics' => ['all' => $stats]], [['tank_id' => 1, 'statistics' => ['battles' => 100]]], catalogue: [1 => ['tier' => 6]]);
-        $input = $preparer->wn8()->input;
-        self::assertNotNull($input);
-        self::assertSame('short', $input->source);
-        self::assertSame('all', $input->mode);
-        $ratings = new WotRatings();
-        self::assertSame(1565, $ratings->wn8($input->statistics, $input->tankBattles, $this->table()));
-        $er = $preparer->er();
-        $wn6 = $preparer->wn6();
-        self::assertSame(6.0, $er->averageTier);
-        self::assertSame($ratings->er($stats, 6), $ratings->er($er->statistics, $er->averageTier));
-        self::assertSame($ratings->wn6($stats, 6), $ratings->wn6($wn6->statistics, $wn6->averageTier));
+        $preparer = new PlayerDataPreparer($catalogue, $expected);
+        $preparer->setData($player, $short, $full);
+        return $preparer;
     }
 
-    public function testMismatchWithoutFullDataReturnsReason(): void
+    private function ratings(): WotRatings
     {
-        $preparer = new PlayerDataPreparer(['statistics' => ['all' => $this->stats()]], [['tank_id' => 1, 'statistics' => ['battles' => 99]]]);
-        $result = $preparer->wn8();
-        self::assertNull($result->input);
-        self::assertNotNull($result->reason);
-    }
-
-    public function testMismatchUsesFullCountersWithoutAccountTotals(): void
-    {
-        $full = [['tank_id' => 1, 'all' => $this->stats(80)]];
-        $preparer = new PlayerDataPreparer(['statistics' => ['all' => $this->stats()]], [['tank_id' => 1, 'statistics' => ['battles' => 99]]], $full);
-        $input = $preparer->wn8()->input;
-        self::assertNotNull($input);
-        self::assertSame('full', $input->source);
-        self::assertSame(80, $input->statistics['battles']);
-        $ratings = new WotRatings();
-        self::assertSame(1565, $ratings->wn8FromFull($input->fullTanks, $this->table()));
-        self::assertSame(1565, $ratings->wn8($input->statistics, $input->tankBattles, $this->table()));
-    }
-
-    public function testSelectedModeNeverUsesFlatAllShortStatistics(): void
-    {
-        $stats = $this->stats();
-        $full = [['tank_id' => 1, 'all' => $this->stats(90), 'random' => $stats, 'team' => $this->stats(20)]];
-        $preparer = new PlayerDataPreparer(['statistics' => ['all' => $stats, 'random' => $stats, 'team' => $this->stats(20)]], [['tank_id' => 1, 'statistics' => ['battles' => 100]]], $full, [1 => ['level' => 8]]);
-        $random = $preparer->wn8('random')->input;
-        self::assertNotNull($random);
-        self::assertSame('full', $random->source);
-        self::assertSame('random', $random->mode);
-        self::assertSame(100, $random->statistics['battles']);
-        self::assertSame(20, $preparer->wn8('team')->input?->statistics['battles']);
-        self::assertSame(8.0, $preparer->er('random')->averageTier);
-        self::assertSame(8.0, $preparer->wn6('team')->averageTier);
-        $without = new PlayerDataPreparer(['statistics' => ['random' => $stats]], [['tank_id' => 1, 'statistics' => ['battles' => 100]]]);
-        self::assertNull($without->wn8('random')->input);
-    }
-
-    public function testModeAwareShortRowsAreSupported(): void
-    {
-        $preparer = new PlayerDataPreparer(['statistics' => ['random' => $this->stats()]], [['tank_id' => 1, 'statistics' => ['random' => ['battles' => 100]]]]);
-        self::assertSame('short', $preparer->wn8('random')->input?->source);
-    }
-
-    public function testMissingDetailedModeOrEmptyDataIsUnavailable(): void
-    {
-        foreach ([[], [['tank_id' => 1, 'all' => $this->stats()]], [['tank_id' => 1, 'random' => $this->stats(0)]]] as $full) {
-            $preparer = new PlayerDataPreparer(['statistics' => ['random' => $this->stats()]], fullTanks: $full);
-            self::assertNull($preparer->wn8('random')->input);
-            self::assertNotNull($preparer->wn8('random')->reason);
-        }
-    }
-
-    public function testMissingPlayerModeIsInvalid(): void
-    {
-        $this->expectException(InvalidInput::class);
-        (new PlayerDataPreparer(['statistics' => ['all' => $this->stats()]]))->wn8('random');
-    }
-
-    public function testPlayedAccountWithoutTankCountsCannotPrepareTier(): void
-    {
-        $this->expectException(PreparationUnavailable::class);
-        (new PlayerDataPreparer(['statistics' => ['all' => $this->stats()]]))->er();
-    }
-
-    public function testWeightedTierAndFullOnlyPreparation(): void
-    {
-        $preparer = new PlayerDataPreparer(['statistics' => ['all' => $this->stats()]], fullTanks: [['tank_id' => 1, 'all' => $this->stats(25)], ['tank_id' => 2, 'all' => $this->stats(75)]], catalogue: [1 => ['tier' => 2], 2 => ['tier' => 6]]);
-        self::assertSame(5.0, $preparer->er()->averageTier);
-        self::assertSame('full', $preparer->wn8()->input?->source);
-    }
-
-    public function testDecodedApiEnvelopesAndExpectedDocument(): void
-    {
-        $wrap = static fn (mixed $record): array => ['status' => 'ok', 'data' => [123 => $record]];
-        $preparer = PlayerDataPreparer::fromApiResponses(
-            123,
-            $wrap(['account_id' => 123, 'statistics' => ['all' => $this->stats()]]),
-            $wrap([['tank_id' => 1, 'statistics' => ['battles' => 100]]]),
-            $wrap([['tank_id' => 1, 'all' => $this->stats(80)]]),
-            expectedValues: ['data' => $this->table()]
-        );
-        $short = $preparer->wn8()->input;
-        $full = $preparer->wn8FromFull()->input;
-        self::assertNotNull($short);
-        self::assertNotNull($full);
-        self::assertSame('short', $short->source);
-        self::assertSame('full', $full->source);
-        self::assertSame(80, $full->statistics['battles']);
-        self::assertSame(1565, (new WotRatings())->wn8($short->statistics, $short->tankBattles, $short->expectedValues));
-        self::assertSame(1565, (new WotRatings())->wn8FromFull($full->fullTanks, $full->expectedValues));
-    }
-
-    public function testErrorEnvelopeIsRejected(): void
-    {
-        $this->expectException(InvalidInput::class);
-        PlayerDataPreparer::fromApiResponses(123, ['status' => 'error'], ['status' => 'ok', 'data' => [123 => []]]);
-    }
-
-    public function testPreparedDataCanBeEditedBeforeCalculationWithoutMutatingSource(): void
-    {
-        $stats = $this->stats();
-        $preparer = new PlayerDataPreparer(['statistics' => ['all' => $stats]], [['tank_id' => 1, 'statistics' => ['battles' => 100]]], [['tank_id' => 1, 'all' => $stats]], [1 => ['tier' => 6]], $this->table());
         $ratings = new WotRatings();
         $ratings->setExpectedValues($this->table());
-        $er = $preparer->er();
-        $baseline = $ratings->er($er->statistics, $er->averageTier);
-        $er->statistics['damage_dealt'] *= 2;
-        $er->averageTier = 8;
-        self::assertNotSame($baseline, $ratings->er($er->statistics, $er->averageTier));
-        self::assertSame($baseline, $ratings->er($preparer->er()->statistics, 6));
-        $short = $preparer->wn8()->input;
-        self::assertNotNull($short);
-        $short->statistics['damage_dealt'] *= 2;
-        self::assertGreaterThan(1565, $ratings->wn8($short->statistics, $short->tankBattles, $short->expectedValues));
-        $short->expectedValues[1]['expDamage'] *= 2;
-        self::assertSame(1565, $ratings->wn8($short->statistics, $short->tankBattles, $short->expectedValues));
-        $full = $preparer->wn8FromFull()->input;
-        self::assertNotNull($full);
-        $full->fullTanks[0]['statistics']['damage_dealt'] *= 2;
-        self::assertGreaterThan(1565, $ratings->wn8FromFull($full->fullTanks, $full->expectedValues));
-        self::assertSame(1565, $ratings->wn8($preparer->wn8()->input->statistics, $preparer->wn8()->input->tankBattles));
-        $short->statistics['wins'] = 101;
+        return $ratings;
+    }
+
+    private function wrap(mixed $value, int $id = 123): array
+    {
+        return ['status' => 'ok', 'data' => [$id => $value]];
+    }
+
+    public function testEmptyPreparerReportsNoInventedModes(): void
+    {
+        $p = new PlayerDataPreparer();
+        self::assertSame([], $p->availableModes());
+        self::assertSame([], $p->diagnostics('tankstats'));
+        self::assertSame([], $p->missingFullTankModes('wn8'));
+        self::assertSame([], $p->battleCountMismatches());
+        self::assertSame(['battleCountMismatches' => [], 'missingFullTankModes' => [], 'diagnostics' => []], $p->report);
         $this->expectException(InvalidInput::class);
-        $ratings->wn8($short->statistics, $short->tankBattles, $short->expectedValues);
+        $p->wn8();
     }
 
-    public function testMalformedFullCountersAreNotSilentlyIgnored(): void
+    public function testSetDataChecksBattlesImmediatelyAndMissingModesDoNotChangeStatus(): void
     {
-        $preparer = new PlayerDataPreparer(['statistics' => ['all' => $this->stats()]], fullTanks: [['tank_id' => 1, 'all' => ['battles' => 100]]]);
+        $p = new PlayerDataPreparer([1 => ['tier' => 6]]);
+        self::assertTrue($p->setData(['statistics' => ['all' => $this->stats(), 'random' => $this->stats()]], [['tank_id' => 1, 'statistics' => ['battles' => 100]]]));
+        foreach (['er', 'wn6', 'wn8'] as $rating) {
+            self::assertSame(['all'], $p->availableModes($rating));
+            self::assertSame(['random'], $p->missingFullTankModes($rating));
+        }
+        self::assertSame([], $p->battleCountMismatches());
+        self::assertSame('missing_mode_data', $p->report['diagnostics']['random']['wn8']['issue']);
+    }
+
+    public function testStatusSeparatesMismatchedCountsFromMissingCoverage(): void
+    {
+        $p = new PlayerDataPreparer([1 => ['tier' => 6]]);
+        self::assertFalse($p->setData(['statistics' => ['all' => $this->stats(), 'random' => $this->stats()]], [['tank_id' => 1, 'statistics' => ['battles' => 99]]]));
+        self::assertSame(['all' => ['accountBattles' => 100, 'tankBattles' => 99]], $p->battleCountMismatches());
+        self::assertSame($p->battleCountMismatches(), $p->report['battleCountMismatches']);
+        self::assertSame('battle_count_mismatch', $p->diagnostics()['all']['wn8']['issue']);
+        self::assertSame(['random'], $p->missingFullTankModes('wn8'));
+        self::assertSame([], $p->availableModes());
+    }
+
+    public function testEmptyShortListForPlayedModeIsMissingCoverageRatherThanMismatch(): void
+    {
+        $p = new PlayerDataPreparer();
+        self::assertTrue($p->setData(['statistics' => ['all' => $this->stats()]], []));
+        self::assertSame([], $p->battleCountMismatches());
+        self::assertSame(['all'], $p->missingFullTankModes('wn8'));
+    }
+
+    public function testMismatchesRemainObservableAfterFullFallbackResolvesPreparation(): void
+    {
+        $p = new PlayerDataPreparer([1 => ['tier' => 6]]);
+        self::assertFalse($p->setData(['statistics' => ['all' => $this->stats()]], [['tank_id' => 1, 'statistics' => ['battles' => 99]]], [['tank_id' => 1, 'all' => $this->stats(80)]]));
+        self::assertSame(['all'], $p->availableModes('wn8'));
+        self::assertSame([], $p->missingFullTankModes('wn8'));
+        self::assertSame(99, $p->battleCountMismatches()['all']['tankBattles']);
+        self::assertNull($p->diagnostics()['all']['wn8']['issue']);
+        self::assertSame(80, $p->wn8()['statistics']['battles']);
+        self::assertSame(1565, $this->ratings()->wn8(...$p->wn8()));
+    }
+
+    public function testNamedArgumentsWorkInAnyKeyOrderAndContainNoMetadata(): void
+    {
+        $p = $this->loaded(['statistics' => ['all' => $this->stats()]], [['tank_id' => 1, 'statistics' => ['battles' => 100]]]);
+        $ratings = $this->ratings();
+        $er = $p->er();
+        self::assertSame(['statistics', 'averageTier'], array_keys($er));
+        self::assertSame(1177, $ratings->er(...array_reverse($er, true)));
+        self::assertSame(1323, $ratings->wn6(...$p->wn6()));
+        $wn8 = $p->wn8();
+        self::assertSame(['statistics', 'tankBattles', 'expectedValues'], array_keys($wn8));
+        self::assertSame(1565, $ratings->wn8(...array_reverse($wn8, true)));
+        self::assertNull($wn8['expectedValues']);
+    }
+
+    public function testAvailableModesUnionAndPerRatingMetadataRequirements(): void
+    {
+        $p = $this->loaded(['statistics' => ['all' => $this->stats(), 'random' => $this->stats(), 'trees_cut' => 42, 'optional' => null]], [['tank_id' => 1, 'statistics' => ['battles' => 100]]], catalogue: []);
+        self::assertSame(['all'], $p->availableModes());
+        self::assertSame(['all'], $p->availableModes('wn8'));
+        self::assertSame([], $p->availableModes('er'));
+        self::assertSame('invalid_input', $p->diagnostics()['all']['er']['issue']);
+        self::assertSame(['random'], $p->missingFullTankModes('wn8'));
+    }
+
+    public function testDifferentRequiredFieldsProduceDifferentMissingModes(): void
+    {
+        $stats = $this->stats();
+        unset($stats['capture_points']);
+        $p = $this->loaded(['statistics' => ['random' => $stats]], full: [['tank_id' => 1, 'random' => $stats]]);
+        self::assertSame([], $p->availableModes('er'));
+        self::assertSame(['random'], $p->missingFullTankModes('er'));
+        self::assertSame([], $p->missingFullTankModes('wn8'));
+        self::assertSame(['random'], $p->availableModes('wn6'));
+        self::assertSame(1565, $this->ratings()->wn8(...$p->wn8('random')));
+    }
+
+    public function testShortFirstAndExplicitFullUseTheirOwnCountersAndTier(): void
+    {
+        $full = $this->stats(80);
+        $full['damage_dealt'] *= 2;
+        $p = $this->loaded(['statistics' => ['all' => $this->stats()]], [['tank_id' => 1, 'statistics' => ['battles' => 100]]], [['tank_id' => 2, 'all' => $full]], [1 => ['tier' => 4], 2 => ['tier' => 8]]);
+        foreach (['er', 'wn6'] as $rating) {
+            self::assertSame(100, $p->$rating()['statistics']['battles']);
+            self::assertSame(4.0, $p->$rating()['averageTier']);
+            self::assertSame(80, $p->$rating(source: 'tankstats')['statistics']['battles']);
+            self::assertSame(8.0, $p->$rating(source: 'tankstats')['averageTier']);
+            self::assertSame(160000.0, $p->$rating(source: 'tankstats')['statistics']['damage_dealt']);
+        }
+        self::assertSame('short', $p->diagnostics()['all']['wn8']['source']);
+        self::assertSame('full', $p->diagnostics('tankstats')['all']['wn8']['source']);
+        self::assertSame(80, $p->wn8FromFull()['tanks'][0]['statistics']['battles']);
+    }
+
+    public function testFlatAllCountsNeverBecomeRandomWeights(): void
+    {
+        $p = $this->loaded(['statistics' => ['all' => $this->stats(), 'random' => $this->stats()]], [['tank_id' => 1, 'statistics' => ['battles' => 100]]], [['tank_id' => 1, 'random' => $this->stats(60)]]);
+        self::assertSame(60, $p->er('random')['statistics']['battles']);
+        self::assertSame(60, $p->wn6('random')['statistics']['battles']);
+        self::assertSame(60, $p->wn8('random')['tankBattles'][0]['battles']);
+        self::assertSame('short', $p->diagnostics()['all']['er']['source']);
+    }
+
+    public function testMissingAllInModeMapFallsBackAndModeKeyedCountsAreComparable(): void
+    {
+        $p = $this->loaded(['statistics' => ['all' => $this->stats(), 'random' => $this->stats()]], [['tank_id' => 1, 'statistics' => ['random' => ['battles' => 100]]]], [['tank_id' => 1, 'all' => $this->stats(80)]]);
+        self::assertSame([], $p->battleCountMismatches());
+        foreach (['er', 'wn6', 'wn8'] as $rating) {
+            self::assertSame(['all', 'random'], $p->availableModes($rating));
+            self::assertSame('full', $p->diagnostics()['all'][$rating]['source']);
+            self::assertSame('short', $p->diagnostics()['random'][$rating]['source']);
+        }
+        self::assertSame(80, $p->wn8()['statistics']['battles']);
+    }
+
+    public function testFullModesCanExistWithoutAccountMode(): void
+    {
+        $p = $this->loaded(['statistics' => []], full: [['tank_id' => 1, 'random' => $this->stats(80)]]);
+        self::assertSame(['random'], $p->availableModes('er'));
+        self::assertSame(80, $p->wn6('random')['statistics']['battles']);
+        self::assertSame(1565, $this->ratings()->wn8(...$p->wn8('random')));
+    }
+
+    public function testFullWeightedTierUsesFullBattlesWithoutAccountMixing(): void
+    {
+        $p = $this->loaded(['statistics' => ['all' => $this->stats()]], full: [['tank_id' => 1, 'all' => $this->stats(20)], ['tank_id' => 2, 'all' => $this->stats(60)]], catalogue: [1 => ['tier' => 4], 2 => ['level' => 8]]);
+        self::assertSame(7.0, $p->er()['averageTier']);
+        self::assertSame(80, $p->wn6()['statistics']['battles']);
+    }
+
+    public function testLateFullUpdatesReportAndCachedFailures(): void
+    {
+        $p = $this->loaded(['statistics' => ['all' => $this->stats(), 'random' => $this->stats()]], [['tank_id' => 1, 'statistics' => ['battles' => 99]]]);
+        $oldReport = $p->report;
+        self::assertSame([], $p->availableModes(source: 'tankstats'));
+        try {
+            $p->wn8('random');
+            self::fail('Missing random must fail.');
+        } catch (PreparationUnavailable) {
+            $p->setFullTankStatistics([['tank_id' => 1, 'all' => $this->stats(80), 'random' => $this->stats(60)]]);
+        }
+        self::assertSame(['all', 'random'], $p->availableModes('wn8', 'tankstats'));
+        self::assertSame([], $p->report['missingFullTankModes']['wn8']);
+        self::assertSame(['random'], $oldReport['missingFullTankModes']['wn8']);
+        self::assertSame(60, $p->wn8('random')['statistics']['battles']);
+        self::assertSame(99, $p->battleCountMismatches()['all']['tankBattles']);
+    }
+
+    public function testReplacingFullClearsAllCachedModesCountersAndTier(): void
+    {
+        $p = $this->loaded(['statistics' => ['all' => $this->stats()]], full: [['tank_id' => 1, 'all' => $this->stats(80)]], catalogue: [1 => ['tier' => 4], 2 => ['tier' => 8]]);
+        $old = $p->wn8FromFull();
+        self::assertSame(4.0, $p->er()['averageTier']);
+        self::assertSame(['all'], $p->availableModes('wn8', 'tankstats'));
+        $p->setFullTankStatistics([['tank_id' => 2, 'random' => $this->stats(40)]]);
+        self::assertSame(['random'], $p->availableModes('wn8', 'tankstats'));
+        self::assertSame(8.0, $p->wn6('random')['averageTier']);
+        self::assertSame(80, $old['tanks'][0]['statistics']['battles']);
+        self::assertSame(['all'], $p->missingFullTankModes('wn8'));
+    }
+
+    public function testSetDataReusesConfigurationAndClearsPreviousPlayerFullIdentityAndCaches(): void
+    {
+        $p = new PlayerDataPreparer([1 => ['tier' => 6]], $this->table());
+        self::assertFalse($p->setData(['account_id' => 123, 'statistics' => ['all' => $this->stats()]], [['tank_id' => 1, 'statistics' => ['battles' => 99]]], [['account_id' => 123, 'tank_id' => 1, 'all' => $this->stats(80), 'random' => $this->stats(60)]]));
+        $old = $p->wn8FromFull('random');
+        self::assertSame(['all', 'random'], $p->availableModes('wn8', 'tankstats'));
+        self::assertTrue($p->setData(['account_id' => 456, 'statistics' => ['all' => $this->stats(40)]], [['account_id' => 456, 'tank_id' => 1, 'statistics' => ['battles' => 40]]]));
+        self::assertSame([], $p->availableModes('wn8', 'tankstats'));
+        self::assertSame([], $p->battleCountMismatches());
+        self::assertSame(['all'], $p->availableModes('er'));
+        self::assertSame(40, $p->wn8()['statistics']['battles']);
+        self::assertSame(6.0, $p->er()['averageTier']);
+        self::assertSame(1565, (new WotRatings())->wn8(...$p->wn8()));
+        self::assertSame(60, $old['tanks'][0]['statistics']['battles']);
+        $p->setFullTankStatsResponse($this->wrap([['tank_id' => 1, 'all' => $this->stats(20)]], 456));
+        self::assertSame(20, $p->wn8FromFull()['tanks'][0]['statistics']['battles']);
+    }
+
+    public function testEditableArraysAreIndependentOfCacheSourceAndOtherResults(): void
+    {
+        $p = $this->loaded(['statistics' => ['all' => $this->stats()]], [['tank_id' => 1, 'statistics' => ['battles' => 100]]], [['tank_id' => 1, 'all' => $this->stats()]], expected: $this->table());
+        $ratings = $this->ratings();
+        $er = $p->er();
+        $er['statistics']['damage_dealt'] *= 2;
+        $er['averageTier'] = 8;
+        self::assertNotSame(1177, $ratings->er(...$er));
+        self::assertSame(1177, $ratings->er(...$p->er()));
+        $wn8 = $p->wn8();
+        $wn8['statistics']['damage_dealt'] *= 2;
+        self::assertSame(3091, $ratings->wn8(...$wn8));
+        $wn8['expectedValues'][1]['expDamage'] *= 2;
+        self::assertSame(1565, $ratings->wn8(...$wn8));
+        $wn8['tankBattles'][0]['battles'] = 999;
+        $full = $p->wn8FromFull();
+        $full['tanks'][0]['statistics']['damage_dealt'] *= 2;
+        self::assertSame(3091, $ratings->wn8FromFull(...$full));
+        self::assertSame(1565, $ratings->wn8(...$p->wn8()));
+        self::assertSame(1565, $ratings->wn8FromFull(...$p->wn8FromFull()));
+        $report = $p->report;
+        $report['diagnostics']['all']['wn8']['ready'] = false;
+        self::assertTrue($p->report['diagnostics']['all']['wn8']['ready']);
+        self::assertSame($p->diagnostics(), $p->report['diagnostics']);
+    }
+
+    public function testReportCannotBeOverwrittenExternally(): void
+    {
+        $p = new PlayerDataPreparer();
+        $this->expectException(\Error::class);
+        $p->report = [];
+    }
+
+    public function testSetApiResponsesAndFactoryRetainIdentityWhenFieldsOmitIt(): void
+    {
+        $info = $this->wrap(['statistics' => ['all' => $this->stats()]]);
+        $short = $this->wrap([['tank_id' => 1, 'statistics' => ['battles' => 99]]]);
+        $p = new PlayerDataPreparer(['status' => 'ok', 'data' => [1 => ['tier' => 6]]]);
+        self::assertFalse($p->setApiResponses(123, $info, $short));
+        $factory = PlayerDataPreparer::fromApiResponses(123, $info, $short, catalogue: [1 => ['tier' => 6]]);
+        self::assertSame($p->report, $factory->report);
+        $p->setFullTankStatsResponse($this->wrap([['account_id' => 123, 'tank_id' => 1, 'all' => $this->stats(80)]]));
+        self::assertSame(80, $p->wn8()['statistics']['battles']);
+    }
+
+    public function testInvalidInitialReplacementDoesNotDestroyPreviousSnapshot(): void
+    {
+        $p = $this->loaded(['account_id' => 123, 'statistics' => ['all' => $this->stats()]], [['tank_id' => 1, 'statistics' => ['battles' => 100]]]);
+        $oldReport = $p->report;
+        foreach ([[['statistics' => null], []], [['account_id' => 456, 'statistics' => []], [['tank_id' => 1, 'account_id' => 123]]], [['statistics' => []], [['tank_id' => 1], ['tank_id' => 1]]]] as [$player, $short]) {
+            try {
+                $p->setData($player, $short);
+                self::fail('Invalid replacement must fail.');
+            } catch (InvalidInput) {
+                self::assertSame($oldReport, $p->report);
+                self::assertSame(100, $p->wn8()['statistics']['battles']);
+            }
+        }
+    }
+
+    #[DataProvider('badEnvelopes')]
+    public function testInvalidEnvelopesDoNotReplaceCurrentPlayer(array $info, array $short, ?array $full): void
+    {
+        $p = $this->loaded(['statistics' => ['all' => $this->stats()]], [['tank_id' => 1, 'statistics' => ['battles' => 100]]]);
+        $before = $p->report;
+        try {
+            $p->setApiResponses(123, $info, $short, $full);
+            self::fail('Invalid envelope must fail.');
+        } catch (InvalidInput) {
+            self::assertSame($before, $p->report);
+        }
+    }
+
+    public static function badEnvelopes(): array
+    {
+        $info = ['status' => 'ok', 'data' => [123 => ['statistics' => []]]];
+        $short = ['status' => 'ok', 'data' => [123 => []]];
+        return [
+            'error' => [['status' => 'error'], $short, null],
+            'wrong id' => [['status' => 'ok', 'data' => [124 => []]], $short, null],
+            'absent player' => [['status' => 'ok', 'data' => [123 => null]], $short, null],
+            'identity' => [['status' => 'ok', 'data' => [123 => ['account_id' => 124, 'statistics' => []]]], $short, null],
+            'null full record' => [$info, $short, ['status' => 'ok', 'data' => [123 => null]]],
+        ];
+    }
+
+    public function testInvalidFullReplacementRetainsSnapshotAndForcedReadiness(): void
+    {
+        $p = $this->loaded(['account_id' => 123, 'statistics' => ['all' => $this->stats()]], full: [['tank_id' => 1, 'all' => $this->stats(80)]]);
+        self::assertSame(['all'], $p->availableModes('wn8', 'tankstats'));
+        foreach ([[false], [['tank_id' => 0]], [['tank_id' => 1], ['tank_id' => 1]], [['tank_id' => 1, 'account_id' => 124]]] as $invalid) {
+            try {
+                $p->setFullTankStatistics($invalid);
+                self::fail('Invalid full replacement must fail.');
+            } catch (InvalidInput) {
+                self::assertSame(80, $p->wn8FromFull()['tanks'][0]['statistics']['battles']);
+                self::assertSame(['all'], $p->availableModes('wn8', 'tankstats'));
+            }
+        }
+    }
+
+    public function testFullEnvelopeRequiresKnownIdentity(): void
+    {
+        $p = $this->loaded(['statistics' => []]);
         $this->expectException(InvalidInput::class);
-        $preparer->wn8FromFull();
+        $p->setFullTankStatsResponse($this->wrap([]));
     }
 
-    public function testAvailableModesAndMissingFullDataDoNotBlockReadyWn8(): void
+    public function testNoPartialSummingWhenOneFullTankOmitsMode(): void
     {
-        $preparer = new PlayerDataPreparer(
-            ['statistics' => ['all' => $this->stats(), 'random' => $this->stats(), 'trees_cut' => 42, 'optional' => null]],
-            [['tank_id' => 1, 'statistics' => ['battles' => 100]]],
-            expectedValues: $this->table()
-        );
-        self::assertSame(['all'], $preparer->availableModes());
-        self::assertSame(['all'], $preparer->availableModes('wn8'));
-        self::assertSame([], $preparer->availableModes('er'));
-        self::assertSame(['random'], $preparer->missingFullTankModes());
-        self::assertFalse($preparer->diagnostics()['all']['er']['requiresFullTanks']);
-        self::assertTrue($preparer->diagnostics()['random']['wn8']['requiresFullTanks']);
-        $input = $preparer->wn8()->input;
-        self::assertNotNull($input);
-        self::assertSame(1565, (new WotRatings())->wn8($input->statistics, $input->tankBattles, $input->expectedValues));
-    }
-
-    public function testDefaultPrefersMatchingShortDataForEveryRatingAndForceSelectsFull(): void
-    {
-        $account = $this->stats();
-        $fullStats = $this->stats(80);
-        $fullStats['damage_dealt'] *= 2;
-        $fullStats['capture_points'] *= 3;
-        $preparer = new PlayerDataPreparer(
-            ['statistics' => ['all' => $account]],
-            [['tank_id' => 1, 'statistics' => ['battles' => 100]]],
-            [['tank_id' => 2, 'all' => $fullStats]],
-            [1 => ['tier' => 4], 2 => ['tier' => 8]]
-        );
-        foreach (['er', 'wn6'] as $rating) {
-            $short = $preparer->$rating();
-            $full = $preparer->$rating(source: 'tankstats');
-            self::assertSame('short', $short->source);
-            self::assertSame(100, $short->statistics['battles']);
-            self::assertSame(100000.0, $short->statistics['damage_dealt']);
-            self::assertSame(4.0, $short->averageTier);
-            self::assertSame('full', $full->source);
-            self::assertSame(80, $full->statistics['battles']);
-            self::assertSame(160000.0, $full->statistics['damage_dealt']);
-            self::assertSame(8.0, $full->averageTier);
-        }
-        self::assertSame(240.0, $preparer->er(source: 'tankstats')->statistics['capture_points']);
-        self::assertSame('short', $preparer->wn8()->input?->source);
-        self::assertSame('full', $preparer->wn8(source: 'tankstats')->input?->source);
-        self::assertSame(80, $preparer->wn8FromFull()->input?->statistics['battles']);
-        self::assertSame('short', $preparer->diagnostics()['all']['er']['source']);
-        self::assertSame('full', $preparer->diagnostics('tankstats')['all']['er']['source']);
-    }
-
-    public function testMismatchUsesFullCountersAndTierForEveryRating(): void
-    {
-        $preparer = new PlayerDataPreparer(
-            ['statistics' => ['all' => $this->stats()]],
-            [['tank_id' => 1, 'statistics' => ['battles' => 99]]],
-            [['tank_id' => 1, 'all' => $this->stats(20)], ['tank_id' => 2, 'all' => $this->stats(60)]],
-            [1 => ['tier' => 4], 2 => ['tier' => 8]]
-        );
-        $ratings = new WotRatings();
-        foreach (['er', 'wn6'] as $rating) {
-            $input = $preparer->$rating();
-            self::assertSame('full', $input->source);
-            self::assertSame(80, $input->statistics['battles']);
-            self::assertSame(7.0, $input->averageTier);
-            self::assertSame($ratings->$rating($this->stats(80), 7), $ratings->$rating($input->statistics, $input->averageTier));
-        }
-        self::assertSame(80.0, $preparer->er()->statistics['capture_points']);
-        self::assertSame(40.0, $preparer->wn6()->statistics['wins']);
-        self::assertSame('full', $preparer->wn8()->input?->source);
-        self::assertSame(['all'], $preparer->availableModes('er'));
-        self::assertSame([], $preparer->missingFullTankModes());
-    }
-
-    public function testExplicitFullSourceDoesNotSilentlyUseShortData(): void
-    {
-        $preparer = new PlayerDataPreparer(['statistics' => ['all' => $this->stats()]], [['tank_id' => 1, 'statistics' => ['battles' => 100]]]);
-        self::assertSame('short', $preparer->wn8()->input?->source);
-        self::assertNull($preparer->wn8(source: 'tankstats')->input);
-        self::assertStringContainsString('requested', $preparer->wn8FromFull()->reason);
-        self::assertSame([], $preparer->availableModes('wn8', 'tankstats'));
+        $p = $this->loaded(['statistics' => ['random' => $this->stats()]], full: [['tank_id' => 1, 'random' => $this->stats(50)], ['tank_id' => 2, 'all' => $this->stats(50)]], catalogue: [1 => ['tier' => 6], 2 => ['tier' => 8]]);
+        self::assertSame([], $p->availableModes('wn8'));
+        self::assertSame(['random', 'all'], $p->missingFullTankModes('wn8'));
         $this->expectException(PreparationUnavailable::class);
-        $preparer->er(source: 'tankstats');
+        $p->wn8('random');
     }
 
-    public function testLateDetailedRecordsRefreshAvailabilityAndPreserveExistingInputs(): void
+    public function testMissingAccountCountersCanFallBackToCompleteFull(): void
     {
-        $preparer = new PlayerDataPreparer(
-            ['statistics' => ['all' => $this->stats(), 'random' => $this->stats()]],
-            [['tank_id' => 1, 'statistics' => ['battles' => 100]]],
-            catalogue: [1 => ['tier' => 6]]
-        );
-        $previous = $preparer->wn8()->input;
-        self::assertSame(['random'], $preparer->missingFullTankModes());
-        $preparer->setFullTankStatistics([['tank_id' => 1, 'all' => $this->stats(80), 'random' => $this->stats(60)]]);
-        self::assertSame(['all', 'random'], $preparer->availableModes('wn8'));
-        self::assertSame(['all', 'random'], $preparer->availableModes('er'));
-        self::assertSame([], $preparer->missingFullTankModes());
-        self::assertSame('short', $preparer->wn8()->input?->source);
-        self::assertSame(60, $preparer->wn8('random')->input?->statistics['battles']);
-        self::assertSame('full', $preparer->er('random')->source);
-        $fullSnapshot = $preparer->wn8FromFull()->input;
-        $preparer->setFullTankStatistics([['tank_id' => 1, 'all' => $this->stats(40)]]);
-        self::assertSame(100, $previous?->statistics['battles']);
-        self::assertSame(80, $fullSnapshot?->statistics['battles']);
-        self::assertSame(40, $preparer->wn8FromFull()->input?->statistics['battles']);
-        self::assertSame(['random'], $preparer->missingFullTankModes());
+        $p = $this->loaded(['statistics' => ['all' => ['battles' => 100]]], [['tank_id' => 1, 'statistics' => ['battles' => 100]]], [['tank_id' => 1, 'all' => $this->stats(80)]]);
+        self::assertSame(['all'], $p->availableModes());
+        self::assertSame(80, $p->er()['statistics']['battles']);
+        self::assertSame('full', $p->diagnostics()['all']['wn8']['source']);
     }
 
-    public function testLaterResponseRetainsFactoryIdentityWhenInfoOmitsAccountId(): void
+    public function testMalformedCountersAreNotMissingDataOrNumericMismatches(): void
     {
-        $wrap = static fn (mixed $record): array => ['status' => 'ok', 'data' => [123 => $record]];
-        $preparer = PlayerDataPreparer::fromApiResponses(123, $wrap(['statistics' => ['all' => $this->stats()]]), $wrap([]));
-        $preparer->setFullTankStatsResponse($wrap([['account_id' => 123, 'tank_id' => 1, 'all' => $this->stats(80)]]));
-        self::assertSame(80, $preparer->wn8()->input?->statistics['battles']);
-        foreach ([['status' => 'error'], ['status' => 'ok', 'data' => [124 => []]], $wrap(null), $wrap([['account_id' => 124, 'tank_id' => 1, 'all' => $this->stats()]])] as $bad) {
-            try {
-                $preparer->setFullTankStatsResponse($bad);
-                self::fail('Invalid later response must fail.');
-            } catch (InvalidInput) {
-                self::assertSame(80, $preparer->wn8()->input?->statistics['battles']);
-            }
-        }
-    }
-
-    public function testInvalidLaterTankRecordListDoesNotReplacePreviousData(): void
-    {
-        $preparer = new PlayerDataPreparer(['account_id' => 123, 'statistics' => ['all' => $this->stats()]], fullTanks: [['tank_id' => 1, 'all' => $this->stats(80)]]);
-        foreach ([['tank_id' => 1], [false], [['tank_id' => 0]], [['tank_id' => 1], ['tank_id' => 1]], [['tank_id' => 1, 'account_id' => 124]]] as $bad) {
-            try {
-                $preparer->setFullTankStatistics($bad);
-                self::fail('Invalid record list must fail.');
-            } catch (InvalidInput) {
-                self::assertSame(80, $preparer->wn8()->input?->statistics['battles']);
-                self::assertTrue($preparer->diagnostics()['all']['wn8']['ready']);
-            }
-        }
-    }
-
-    public function testResponseSetterRequiresIdentityForExtractedPlayerRecord(): void
-    {
-        $preparer = new PlayerDataPreparer(['statistics' => ['all' => $this->stats()]]);
+        $p = $this->loaded(['statistics' => ['all' => $this->stats()]], [['tank_id' => 1, 'statistics' => ['wins' => 50]]], [['tank_id' => 1, 'all' => $this->stats(80)]]);
+        self::assertSame([], $p->battleCountMismatches());
+        self::assertSame([], $p->missingFullTankModes('wn8'));
+        self::assertSame('invalid_input', $p->diagnostics()['all']['wn8']['issue']);
         $this->expectException(InvalidInput::class);
-        $preparer->setFullTankStatsResponse(['status' => 'ok', 'data' => [123 => []]]);
+        $p->wn8();
     }
 
-    public function testCatalogueEnvelopeSupportsCombatPreparation(): void
+    public function testExplicitFullSourceIgnoresBadAccountCounters(): void
     {
-        $preparer = new PlayerDataPreparer(
-            ['statistics' => ['all' => $this->stats()]],
-            [['tank_id' => 1, 'statistics' => ['battles' => 100]]],
-            catalogue: ['status' => 'ok', 'data' => [1 => ['tier' => 6]]]
-        );
-        self::assertSame(6.0, $preparer->er()->averageTier);
-        self::assertSame(['all'], $preparer->availableModes('wn6'));
+        $p = $this->loaded(['statistics' => ['all' => ['battles' => 'broken']]], full: [['tank_id' => 1, 'all' => $this->stats(80)]]);
+        self::assertSame([], $p->availableModes());
+        self::assertSame(['all'], $p->availableModes(source: 'tankstats'));
+        self::assertSame(80, $p->er(source: 'tankstats')['statistics']['battles']);
+        self::assertSame(1565, $this->ratings()->wn8FromFull(...$p->wn8FromFull()));
     }
 
-    public function testFullOnlyCountersDoNotNeedUnrelatedAccountFields(): void
+    public function testExplicitFullDoesNotSilentlyUseShortData(): void
     {
-        $preparer = new PlayerDataPreparer(
-            ['statistics' => ['all' => ['battles' => 100]]],
-            [['tank_id' => 1, 'statistics' => ['battles' => 100]]],
-            [['tank_id' => 1, 'all' => $this->stats(80)]],
-            [1 => ['tier' => 6]]
-        );
-        self::assertSame([], $preparer->availableModes());
-        self::assertSame(['all'], $preparer->availableModes(source: 'tankstats'));
-        self::assertSame(80, $preparer->er(source: 'tankstats')->statistics['battles']);
-        self::assertSame(80, $preparer->wn6(source: 'tankstats')->statistics['battles']);
-        self::assertSame(80, $preparer->wn8FromFull()->input?->statistics['battles']);
+        $p = $this->loaded(['statistics' => ['all' => $this->stats()]], [['tank_id' => 1, 'statistics' => ['battles' => 100]]]);
+        self::assertSame(['all'], $p->availableModes('wn8'));
+        self::assertSame([], $p->availableModes('wn8', 'tankstats'));
+        $this->expectException(PreparationUnavailable::class);
+        $p->wn8FromFull();
     }
 
-    public function testIncompleteFullModeCoverageIsNeverPartiallySummed(): void
+    public function testZeroBattlesRemainCalculableWithExpectedAndRequiredCounters(): void
     {
-        $preparer = new PlayerDataPreparer(
-            ['statistics' => ['random' => $this->stats()]],
-            fullTanks: [['tank_id' => 1, 'random' => $this->stats(50)], ['tank_id' => 2, 'all' => $this->stats(50)]]
-        );
-        self::assertNull($preparer->wn8('random')->input);
-        self::assertSame(['random', 'all'], $preparer->missingFullTankModes());
-        self::assertSame([], $preparer->availableModes('wn8'));
+        $p = $this->loaded(['statistics' => ['all' => $this->stats(0)]], expected: $this->table());
+        self::assertSame(0, $this->ratings()->er(...$p->er()));
+        self::assertSame(0, $this->ratings()->wn6(...$p->wn6()));
+        self::assertSame(0, $this->ratings()->wn8(...$p->wn8()));
     }
 
-    public function testMalformedFullCountersAreDiagnosedSeparatelyFromMissingFullData(): void
+    public function testExplicitZeroFullCanBeReadyWhileAutoRejectsReplacingPlayedMode(): void
     {
-        $preparer = new PlayerDataPreparer(['statistics' => ['all' => $this->stats()]], fullTanks: [['tank_id' => 1, 'all' => ['battles' => 100, 'wins' => 101]]]);
-        self::assertSame([], $preparer->availableModes('wn8'));
-        self::assertSame([], $preparer->missingFullTankModes());
-        self::assertNotNull($preparer->diagnostics()['all']['wn8']['reason']);
-        self::assertFalse($preparer->diagnostics()['all']['wn8']['ready']);
+        $p = $this->loaded(['statistics' => ['random' => $this->stats()]], full: [['tank_id' => 1, 'random' => $this->stats(0)]]);
+        self::assertSame([], $p->availableModes('wn8'));
+        self::assertSame(['random'], $p->missingFullTankModes('wn8'));
+        self::assertSame(['random'], $p->availableModes('wn8', 'tankstats'));
+        self::assertSame(0, $this->ratings()->wn8FromFull(...$p->wn8FromFull('random')));
     }
 
-    public function testMatchingShortDataDoesNotValidateUnusedFullCounters(): void
+    public function testUnknownSelectorsAreRejected(): void
     {
-        $preparer = new PlayerDataPreparer(
-            ['statistics' => ['all' => $this->stats()]],
-            [['tank_id' => 1, 'statistics' => ['battles' => 100]]],
-            [['tank_id' => 1, 'all' => ['battles' => 100]]],
-            [1 => ['tier' => 6]]
-        );
-        self::assertSame(['all'], $preparer->availableModes('wn8'));
-        self::assertSame(['all'], $preparer->availableModes('er'));
-        self::assertSame([], $preparer->availableModes('wn8', 'tankstats'));
-        self::assertSame('short', $preparer->wn8()->input?->source);
-    }
-
-    public function testSourceAndRatingSelectorsRejectUnknownValues(): void
-    {
-        $preparer = new PlayerDataPreparer(['statistics' => ['all' => $this->stats()]]);
-        foreach ([static fn () => $preparer->wn8(source: 'short'), static fn () => $preparer->availableModes('wn7'), static fn () => $preparer->diagnostics('full')] as $call) {
+        $p = $this->loaded(['statistics' => []]);
+        foreach ([fn () => $p->availableModes('wn7'), fn () => $p->missingFullTankModes('wn7'), fn () => $p->diagnostics('full'), fn () => $p->wn8(source: 'short'), fn () => $p->er('unknown')] as $call) {
             try {
                 $call();
                 self::fail('Unknown selector must fail.');
@@ -391,55 +419,21 @@ final class PlayerDataPreparerTest extends TestCase
         }
     }
 
-    public function testZeroBattleInputsStayCalculableWithExpectedValues(): void
+    public function testFullCounterOverflowIsDiagnosedSeparately(): void
     {
-        $preparer = new PlayerDataPreparer(['statistics' => ['all' => $this->stats(0)]], fullTanks: [['tank_id' => 1, 'all' => $this->stats(0)]], expectedValues: $this->table());
-        self::assertSame(['all'], $preparer->availableModes('er'));
-        $ratings = new WotRatings();
-        self::assertSame(0, $ratings->er($preparer->er()->statistics, $preparer->er()->averageTier));
-        $full = $preparer->wn8FromFull()->input;
-        self::assertNotNull($full);
-        self::assertSame(0, $ratings->wn8FromFull($full->fullTanks, $full->expectedValues));
+        $stats = $this->stats(1);
+        $stats['damage_dealt'] = PHP_FLOAT_MAX * 0.75;
+        $p = $this->loaded(['statistics' => ['all' => $this->stats(2)]], full: [['tank_id' => 1, 'all' => $stats], ['tank_id' => 2, 'all' => $stats]]);
+        self::assertSame('calculation_failed', $p->diagnostics()['all']['wn8']['issue']);
+        $this->expectException(CalculationFailed::class);
+        $p->wn8();
     }
 
-    public function testDetailedModesCanBePreparedWhenAccountInfoOmitsThem(): void
+    public function testSetDataStatusIsNotASubstituteForCheckingMalformedCounters(): void
     {
-        $preparer = new PlayerDataPreparer(
-            ['statistics' => ['all' => $this->stats()]],
-            [['tank_id' => 1, 'statistics' => ['battles' => 100]]],
-            [['tank_id' => 1, 'random' => $this->stats(80)]],
-            [1 => ['tier' => 6]],
-            $this->table()
-        );
-        self::assertSame(['all', 'random'], $preparer->availableModes('wn8'));
-        self::assertSame(['all', 'random'], $preparer->availableModes('er'));
-        self::assertSame('full', $preparer->er('random')->source);
-        self::assertSame(80, $preparer->wn6('random', 'tankstats')->statistics['battles']);
-        $input = $preparer->wn8('random')->input;
-        self::assertNotNull($input);
-        self::assertSame(1565, (new WotRatings())->wn8FromFull($input->fullTanks, $input->expectedValues));
-    }
-
-    public function testExplicitFullSourceIsIndependentOfInvalidAccountBattleCounter(): void
-    {
-        $preparer = new PlayerDataPreparer(
-            ['statistics' => ['all' => ['battles' => 'broken']]],
-            fullTanks: [['tank_id' => 1, 'all' => $this->stats(80)]],
-            catalogue: [1 => ['tier' => 6]]
-        );
-        self::assertSame([], $preparer->availableModes());
-        self::assertSame(['all'], $preparer->availableModes('wn8', 'tankstats'));
-        self::assertSame(80, $preparer->er(source: 'tankstats')->statistics['battles']);
-        self::assertSame(80, $preparer->wn8FromFull()->input?->statistics['battles']);
-    }
-
-    public function testExplicitZeroBattleFullDataDoesNotUsePlayedAccountCounters(): void
-    {
-        $preparer = new PlayerDataPreparer(['statistics' => ['all' => $this->stats()]], fullTanks: [['tank_id' => 1, 'all' => $this->stats(0)]], expectedValues: $this->table());
-        self::assertNull($preparer->wn8()->input);
-        $full = $preparer->wn8FromFull()->input;
-        self::assertNotNull($full);
-        self::assertSame(0, $full->statistics['battles']);
-        self::assertSame(0, (new WotRatings())->wn8FromFull($full->fullTanks, $full->expectedValues));
+        $p = new PlayerDataPreparer();
+        self::assertTrue($p->setData(['statistics' => ['all' => ['battles' => 'broken']]], [['tank_id' => 1, 'statistics' => ['battles' => 100]]]));
+        self::assertSame([], $p->battleCountMismatches());
+        self::assertSame('invalid_input', $p->report['diagnostics']['all']['wn8']['issue']);
     }
 }

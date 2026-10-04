@@ -25,9 +25,8 @@ final class WotRatings
     /** @param array<int|string, mixed>|null $expectedValues */
     private function assertExpectedValuesAvailable(?array $expectedValues = null): void
     {
-        if ($expectedValues !== null) {
-            ExpectedValues::normalize($expectedValues);
-        } elseif ($this->expectedValues === null) {
+        // Full aggregation needs presence only; wn8() validates an override once.
+        if ($expectedValues === null && $this->expectedValues === null) {
             throw new MissingExpectedValues('Install expected values or pass a table to wn8().');
         }
     }

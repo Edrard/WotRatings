@@ -1,0 +1,2 @@
+# Keep text checkouts compatible with Pint on Windows and Linux.
+* text=auto eol=lf
