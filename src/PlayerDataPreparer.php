@@ -9,6 +9,9 @@ use Edrard\WotRatings\Exception\InvalidInput;
 use Edrard\WotRatings\Exception\PreparationUnavailable;
 use Edrard\WotRatings\Internal\ExpectedValues;
 use Edrard\WotRatings\Internal\Input;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
+use Throwable;
 
 /**
  * Reusable offline preparer. Each setData() replaces the current player snapshot.
@@ -61,13 +64,15 @@ final class PlayerDataPreparer
     private readonly array $catalogue;
 
     private ?int $accountId = null;
+    private readonly LoggerInterface $logger;
 
     /**
      * @param array<int|string, mixed> $catalogue Vehicle map or decoded encyclopedia/vehicles envelope.
      * @param array<int|string, mixed>|null $expectedValues XVM document, rows or tank-ID map.
      */
-    public function __construct(array $catalogue = [], ?array $expectedValues = null)
+    public function __construct(array $catalogue = [], ?array $expectedValues = null, ?LoggerInterface $logger = null)
     {
+        $this->logger = $logger ?? new NullLogger();
         $this->catalogue = self::catalogueRecords($catalogue);
         $this->expectedValues = $expectedValues === null ? null : ExpectedValues::normalize($expectedValues);
     }
@@ -205,9 +210,9 @@ final class PlayerDataPreparer
      * @param array<int|string, mixed> $catalogue
      * @param array<int|string, mixed>|null $expectedValues
      */
-    public static function fromApiResponses(int $accountId, array $accountInfo, array $accountTanks, ?array $tankStats = null, array $catalogue = [], ?array $expectedValues = null): self
+    public static function fromApiResponses(int $accountId, array $accountInfo, array $accountTanks, ?array $tankStats = null, array $catalogue = [], ?array $expectedValues = null, ?LoggerInterface $logger = null): self
     {
-        $preparer = new self($catalogue, $expectedValues);
+        $preparer = new self($catalogue, $expectedValues, $logger);
         $preparer->setApiResponses($accountId, $accountInfo, $accountTanks, $tankStats);
         return $preparer;
     }
@@ -316,6 +321,35 @@ final class PlayerDataPreparer
             $missing[$rating] = $this->missingFullTankModes($rating);
         }
         $this->report = ['battleCountMismatches' => $this->battleMismatches, 'missingFullTankModes' => $missing, 'diagnostics' => $this->availability];
+        $this->logReadiness();
+    }
+
+    private function logReadiness(): void
+    {
+        if ($this->logger instanceof NullLogger) {
+            return;
+        }
+        try {
+            $unavailable = $invalid = 0;
+            foreach ($this->availability as $ratings) {
+                foreach ($ratings as $status) {
+                    if (!$status['ready']) {
+                        ++$unavailable;
+                        $invalid += in_array($status['issue'], ['invalid_input', 'calculation_failed'], true) ? 1 : 0;
+                    }
+                }
+            }
+            if ($unavailable === 0 && $this->battleMismatches === []) {
+                return;
+            }
+            $this->logger->log(
+                $invalid > 0 || $this->battleMismatches !== [] ? 'warning' : 'debug',
+                'WotRatings preparation found {mismatchModes} mismatched modes and {unavailableRatings} unavailable rating/mode pairs.',
+                ['mismatchModes' => count($this->battleMismatches), 'unavailableRatings' => $unavailable, 'invalidRatings' => $invalid]
+            );
+        } catch (Throwable) {
+            // Preparation and its report remain usable when diagnostic delivery fails.
+        }
     }
 
     /** @return BattleMismatches */

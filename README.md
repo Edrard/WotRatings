@@ -49,7 +49,7 @@ All three loading methods perform the same immediate battle-count and readiness 
 | --- | --- | --- | --- |
 | `setData($player, $shortTanks, $fullTanks = null)` | One player's records, already selected from `data[$accountId]` | Replaces data in the existing preparer | Battle-count status: `bool` |
 | `setApiResponses($accountId, $accountInfo, $accountTanks, $tankStats = null)` | Whole decoded WG responses, including `status` and `data` | Selects the player by ID and replaces data in the existing preparer | The same battle-count status: `bool` |
-| `fromApiResponses($accountId, $accountInfo, $accountTanks, $tankStats = null, $catalogue = [], $expectedValues = null)` | Whole decoded WG responses and optional configuration | Creates and loads a new preparer | `PlayerDataPreparer` object |
+| `fromApiResponses($accountId, $accountInfo, $accountTanks, $tankStats = null, $catalogue = [], $expectedValues = null, $logger = null)` | Whole decoded WG responses and optional configuration | Creates and loads a new preparer | `PlayerDataPreparer` object |
 
 ### What a decoded API response contains
 
@@ -815,6 +815,35 @@ Response (scale values rounded for display):
 ```
 
 These scales are historical formulas, not current XVM percentile conversions.
+
+## Optional PSR-3 logging
+
+The package declares the MIT-licensed `psr/log` contract (`^3.0`). PlayerDataPreparer accepts an optional application-provided `Psr\Log\LoggerInterface` as the last constructor argument, `logger`. The factory fromApiResponses accepts the same optional last argument. Omitting it or passing null uses NullLogger: loading, preparation and calculation work normally without any log output. WotRatings and LegacyRatings remain pure calculators without per-rating logs.
+
+Passing `NullLogger`, including a subclass, explicitly disables diagnostics. For an active custom logger, implement `LoggerInterface` or extend `Psr\Log\AbstractLogger`.
+
+In this executable example NullLogger stands in for your application's existing PSR-3 logger. Replace that variable with your own logger to receive records:
+
+```php
+$logger = new \Psr\Log\NullLogger();
+$loggedPreparer = new PlayerDataPreparer(catalogue: $data['catalogue'], logger: $logger);
+$status = $loggedPreparer->setApiResponses($accountId, $accountInfo, $accountTanks);
+echo json_encode([
+    'status' => $status,
+    'available' => $loggedPreparer->availableModes('wn8'),
+    'missing' => $loggedPreparer->missingFullTankModes('wn8'),
+]);
+```
+
+Response:
+
+```json
+{"status":true,"available":["all"],"missing":["random"]}
+```
+
+At most one summary is attempted after loading or replacing full statistics, only when preparation has problems. Numeric mismatches or malformed calculation data use warning; missing mode/counter coverage alone uses debug. Context contains only three counts: mismatchModes, unavailableRatings (rating/mode pairs) and invalidRatings. A fully ready load, repeated availableModes/diagnostics queries and rating preparation/calculation calls are silent. No per-tank records or retained log history are created.
+
+Logging is best effort. Throwable from the external logger or summary construction is discarded only at the logging boundary. It cannot change the prepared arrays, report, return status or original validation exception. No player IDs, nicknames, raw records, expected tables, tokens or exception objects/messages/traces are logged. The application owns handlers, storage, filtering, retention and monitoring. PSR-3 calls are synchronous; if delivery must be non-blocking, inject a logger that queues records. [Українська документація](docs/uk/README.md).
 
 ## Errors, caching and API changes
 

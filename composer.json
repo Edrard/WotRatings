@@ -6,7 +6,7 @@
     "type": "library",
     "license": "MIT",
     "authors": [{"name": "Edrard"}],
-    "require": {"php": "^8.5"},
+    "require": {"php": "^8.5", "psr/log": "^3.0"},
     "require-dev": {"phpunit/phpunit": "^12.5", "phpstan/phpstan": "^2.1", "laravel/pint": "^1.0"},
     "autoload": {"psr-4": {"Edrard\\WotRatings\\": "src/"}},
     "autoload-dev": {"psr-4": {"Edrard\\Tests\\WotRatings\\": "tests/"}},
